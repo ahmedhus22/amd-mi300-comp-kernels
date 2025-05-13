@@ -139,6 +139,7 @@ def fp8_mm_kernel(
     b_ptrs = b_ptr + (offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
 
     BLOCK_SIZE_SCALE = 128
+    n_block_idx = (pid_n * BLOCK_SIZE_N) // BLOCK_SIZE_SCALE
     # -----------------------------------------------------------
     # Iterate to compute a block of the C matrix.
     # We accumulate into a `[BLOCK_SIZE_M, BLOCK_SIZE_N]` block
@@ -148,9 +149,9 @@ def fp8_mm_kernel(
     for k in range(0, tl.cdiv(K, BLOCK_SIZE_K)):
         # Load the next block of A and B, generate a mask by checking the K dimension.
         # If it is out of bounds, set it to 0.
-        k_block_num = (k * BLOCK_SIZE_K) // BLOCK_SIZE_SCALE
-        b_scale = tl.load(b_scale_ptr + pid_n * stride_bn_scale + k_block_num * stride_bk_scale)
-        a_scale_ptrs = a_scale_ptr + (offs_am[:] * stride_am_scale + k_block_num * stride_ak_scale)
+        k_block_idx = (k * BLOCK_SIZE_K) // BLOCK_SIZE_SCALE
+        b_scale = tl.load(b_scale_ptr + n_block_idx * stride_bn_scale + k_block_idx * stride_bk_scale)
+        a_scale_ptrs = a_scale_ptr + (offs_am[:] * stride_am_scale + k_block_idx * stride_ak_scale)
         a_scale = tl.load(a_scale_ptrs)
         a = tl.load(a_ptrs, mask=offs_k[None, :] < K - k * BLOCK_SIZE_K, other=0.0)
         b = tl.load(b_ptrs, mask=offs_k[:, None] < K - k * BLOCK_SIZE_K, other=0.0)
