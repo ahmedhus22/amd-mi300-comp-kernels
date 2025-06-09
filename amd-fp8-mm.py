@@ -77,12 +77,6 @@ def get_hip_autotune_config():
             num_warps=8, num_stages=2),
     ]
 
-# def get_hip_autotune_config():
-#     return [
-#         triton.Config(
-#             {'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 128, 'GROUP_SIZE_M': 4, 'waves_per_eu': 2},
-#             num_warps=8, num_stages=2)
-#     ]
 
 
 @triton.autotune(
@@ -96,7 +90,6 @@ def fp8_mm_kernel(
                c_ptr,
                # matrix dimensions
                M, N, K,
-               #SCALE_N, SCALE_k,
                # strides
                stride_am, stride_ak,
                stride_bn, stride_bk, # tranpose b
@@ -114,7 +107,7 @@ def fp8_mm_kernel(
     # -----------------------------------------------------------
     # Map program ids `pid` to the block of C it should compute.
     # This is done in a grouped ordering to promote L2 data reuse.
-    # See above `L2 Cache Optimizations` section for details.
+    # each block computes [BLOCK_SIZE_M, BLOCK_SIZE_N] elements for c
     pid = tl.program_id(axis=0)
     num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
     num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
@@ -125,13 +118,8 @@ def fp8_mm_kernel(
     pid_m = first_pid_m + ((pid % num_pid_in_group) % group_size_m)
     pid_n = (pid % num_pid_in_group) // group_size_m
 
-    # ----------------------------------------------------------
-    # Create pointers for the first blocks of A and B.
-    # We will advance this pointer as we move in the K direction
-    # and accumulate
     # `a_ptrs` is a block of [BLOCK_SIZE_M, BLOCK_SIZE_K] pointers
     # `b_ptrs` is a block of [BLOCK_SIZE_K, BLOCK_SIZE_N] pointers
-    # See above `Pointer Arithmetic` section for details
     offs_am = (pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)) % M
     offs_bn = (pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)) % N
     offs_k = tl.arange(0, BLOCK_SIZE_K)
@@ -140,11 +128,7 @@ def fp8_mm_kernel(
 
     BLOCK_SIZE_SCALE = 128
     n_block_idx = (pid_n * BLOCK_SIZE_N) // BLOCK_SIZE_SCALE
-    # -----------------------------------------------------------
-    # Iterate to compute a block of the C matrix.
-    # We accumulate into a `[BLOCK_SIZE_M, BLOCK_SIZE_N]` block
-    # of fp32 values for higher accuracy.
-    # `accumulator` will be converted back to fp16 after the loop.
+    
     accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
     for k in range(0, tl.cdiv(K, BLOCK_SIZE_K)):
         # Load the next block of A and B, generate a mask by checking the K dimension.
@@ -192,10 +176,6 @@ def custom_kernel(data: input_t) -> output_t:
     m = a.shape[0]
     n = b.shape[0]
     k = a.shape[1]
-    # block_shape_n = 128
-    # block_shape_k = 128
-    # scale_n = b_scale.shape[0]
-    # scale_k = b_scale.shape[1]
 
     # block multiply and scale
     grid = lambda META: (triton.cdiv(m, META['BLOCK_SIZE_M']) * triton.cdiv(n, META['BLOCK_SIZE_N']), )
